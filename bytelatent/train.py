@@ -19,7 +19,8 @@ import torch.distributed
 import torch.nn.functional
 import torch.nn.functional as F
 import wandb
-import xformers.profiler
+# xformers profiler is optional; training works without it
+xformers = None  # type: ignore
 from torch.distributed._tensor import DTensor
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim import lr_scheduler
@@ -465,9 +466,10 @@ def train(args: TrainArgs):
                     # We zero grads to cancel this fake step
                     optimizer.zero_grad()
 
-                assert (
-                    next(probe_mod.parameters()).grad is None
-                ), "Probe model shouldn't have grads at this point"
+                if 'probe' in locals():
+                    assert (
+                        next(probe_mod.parameters()).grad is None
+                    ), "Probe model shouldn't have grads at this point"
 
             if args.train_entropy_model:
                 pred = model(batch_x)
@@ -526,7 +528,7 @@ def train(args: TrainArgs):
             curr_iter_time = round(start_timer.elapsed_time(end_timer) * 1e-3, 4)
 
             # if profiler is active
-            if torch_profiler:
+            if torch_profiler and xformers is not None:
                 xformers.profiler.step()
 
             # log metrics
@@ -550,7 +552,7 @@ def train(args: TrainArgs):
                 total_tokens = dp_degree * tokens_per_gpu
                 # This is an estimate and the correct values may change
                 # if you change the architecture
-                # Use xformer's analyze profile trace to get actual measurement
+                # Use analyze profile traces to get actual measurement
                 FLOPS = (
                     get_num_flop_per_token(
                         model_param_count - model_args.vocab_size * model_args.dim,

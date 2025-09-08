@@ -9,12 +9,12 @@ import torch
 from pydantic import BaseModel, ConfigDict
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.functional import scaled_dot_product_attention as sdp_attention
 from torch.nn.attention.flex_attention import (
     BlockMask,
     _mask_mod_signature,
     flex_attention,
 )
-from xformers.ops import AttentionBias, fmha
 
 from bytelatent.tokenizers.constants import EOS_ID
 
@@ -305,16 +305,8 @@ class RotaryEmbedding(torch.nn.Module):
             return self.freqs_cis[0:seqlen]
 
 
-def _reshape_for_attn_bias(
-    attn_bias: AttentionBias | None,
-    *tensors: torch.Tensor,
-) -> list[torch.Tensor]:
-    to_transform = list(tensors)
-    if isinstance(attn_bias, fmha.attn_bias.BlockDiagonalCausalMask):
-        # could be `view` instead of reshape during training, but for inference
-        # have to reshape due to strides mismatch
-        to_transform = [t.reshape(1, -1, *t.shape[2:]) for t in to_transform]
-    return to_transform
+def _reshape_for_attn_bias(*tensors: torch.Tensor) -> list[torch.Tensor]:
+    return list(tensors)
 
 
 class Attention(nn.Module):
@@ -363,7 +355,7 @@ class Attention(nn.Module):
         x: torch.Tensor,
         freq_cis: torch.Tensor,
         tok_idx: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, AttentionBias, str]] = None,
+        mask: Optional[Union[BlockMask, torch.Tensor, str]] = None,
         attn_impl: str = "sdpa",
     ) -> torch.Tensor:
         # B S D
@@ -394,20 +386,12 @@ class Attention(nn.Module):
             output = flex_attention_comp(xq, xk, xv, block_mask=mask)
             output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
 
-        elif attn_impl == "xformers":
-            assert mask is None or isinstance(mask, AttentionBias)
-            query_shape = xq.shape
-            xq, xk, xv = _reshape_for_attn_bias(mask, xq, xk, xv)
-            output = fmha.memory_efficient_attention(xq, xk, xv, attn_bias=mask)
-            output = output.view(query_shape)
-            # This uses B S H D instead of B H S D of pytorch
-
         elif attn_impl == "sdpa":
             xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
             assert mask is None or isinstance(mask, (str, torch.Tensor))
             is_causal = (mask == "causal") if isinstance(mask, str) else False
             mask = mask if isinstance(mask, torch.Tensor) else None
-            output = F.scaled_dot_product_attention(
+            output = sdp_attention(
                 xq,
                 xk,
                 xv,
@@ -550,7 +534,7 @@ class TransformerBlock(nn.Module):
         x: torch.Tensor,
         freq_cis: torch.Tensor,
         tok_idx: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, AttentionBias, str]] = None,
+        mask: Optional[Union[BlockMask, torch.Tensor, str]] = None,
         attn_impl: str = "sdpa",
     ) -> torch.Tensor:
         attn_out = self.attention(
@@ -607,7 +591,7 @@ class BaseTransformer(nn.Module, SequenceModelWithOutput):
         self,
         h,
         tok_idx: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, AttentionBias, str]] = None,
+        mask: Optional[Union[BlockMask, torch.Tensor, str]] = None,
         attn_impl: str = "sdpa",
     ):
 

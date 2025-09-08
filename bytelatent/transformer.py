@@ -15,7 +15,6 @@ from torch.distributed.tensor.parallel import (
     parallelize_module,
 )
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask
-from xformers.ops import AttentionBias
 
 from bytelatent.base_transformer import (
     BaseTransformer,
@@ -77,7 +76,10 @@ class LMTransformer(
         )
     },
 ):
-    def __init__(self, args: LMTransformerArgs):
+    def __init__(self, args: LMTransformerArgs | None = None, **kwargs):
+        # Allow instantiation either with a single `args` object or with flattened kwargs
+        if args is None:
+            args = LMTransformerArgs(**kwargs)
         super().__init__(args)
         self.weight_tying = args.weight_tying
         self.sliding_window = args.sliding_window
@@ -107,7 +109,7 @@ class LMTransformer(
         token_values: torch.Tensor,
         target: Optional[torch.Tensor] = None,
         tok_idx: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, AttentionBias, torch.Tensor, str]] = None,
+        mask: Optional[Union[BlockMask, torch.Tensor, str]] = None,
         attn_impl: str | None = None,
     ):
         if attn_impl is None:

@@ -3,16 +3,14 @@ import logging
 from typing import List, Optional, Tuple, Union
 
 import torch
-import torch.nn
 import torch.nn as nn
 from torch.nn import functional as F
+from torch.nn.functional import scaled_dot_product_attention as sdp_attention
 from torch.nn.attention.flex_attention import BlockMask
-from xformers.ops import AttentionBias
 
 from bytelatent.base_transformer import (
     BaseTransformer,
     BaseTransformerArgs,
-    flex_attention_comp,
     repeat_kv,
 )
 from bytelatent.model.utils import create_causal_mask
@@ -79,7 +77,7 @@ class CrossAttention(nn.Module):
         self,
         x: torch.Tensor,
         kv: torch.Tensor,
-        mask: Optional[Union[BlockMask, AttentionBias, str]] = None,
+        mask: Optional[Union[BlockMask, torch.Tensor, str]] = None,
     ) -> torch.Tensor:
         # B S D
         bsz, seq_len, _ = x.shape
@@ -100,9 +98,12 @@ class CrossAttention(nn.Module):
         xk = repeat_kv(xk, self.heads_per_group, dim=2)
         xv = repeat_kv(xv, self.heads_per_group, dim=2)
 
-        assert mask is None or isinstance(mask, BlockMask)
+        # SDPA cross-attention
+        assert mask is None or isinstance(mask, torch.Tensor)
         xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
-        output = flex_attention_comp(xq, xk, xv, block_mask=mask)
+        output = sdp_attention(
+            xq, xk, xv, attn_mask=mask, is_causal=False
+        )
         output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
 
         output = self.wo(output.reshape(output_shape))
@@ -167,7 +168,7 @@ class GlobalTransformer(BaseTransformer):
         tokens: torch.Tensor,
         tok_idx: Optional[torch.Tensor] = None,
         embeds: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, AttentionBias, torch.Tensor, str]] = None,
+        mask: Optional[Union[BlockMask, torch.Tensor, str]] = None,
         cache: Optional[List[Tuple[torch.Tensor, torch.Tensor, int]]] = None,
     ):
         """

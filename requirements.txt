@@ -21,3 +21,5 @@ typer
 rich
 fsspec[full]
 huggingface-hub==0.30.*
+torch
+# xformers==0.0.23.post1  # Commented out due to build issues on macOS ARM64

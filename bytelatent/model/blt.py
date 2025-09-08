@@ -279,11 +279,10 @@ def cross_attn_mask(
             )
             return block_mask
         else:
-            return torch.where(
-                cross_mask, torch.tensor(0.0), torch.tensor(float("-inf"))
-            ).unsqueeze(
-                1
-            )  # [bs, 1, q_len, kv_len]
+            # Build additive attn mask with explicit float32 dtype
+            zero = torch.tensor(0.0, device=patch_ids.device, dtype=torch.float32)
+            neg_inf = torch.tensor(float("-inf"), device=patch_ids.device, dtype=torch.float32)
+            return torch.where(cross_mask, zero, neg_inf).unsqueeze(1)  # [bs, 1, q_len, kv_len]
 
 
 def get_blt_input(
@@ -791,8 +790,10 @@ class ByteLatentTransformer(
     improved performance and inference efficiency.
     """
 
-    def __init__(self, args: ByteLatentTransformerArgs):
+    def __init__(self, args: ByteLatentTransformerArgs | None = None, **kwargs):
         super().__init__()
+        if args is None:
+            args = ByteLatentTransformerArgs(**kwargs)
 
         # General configuration
         self.weight_tying = args.weight_tying
@@ -938,7 +939,7 @@ class ByteLatentTransformer(
                 patches_as_queries=True,
                 cross_attn_k=self.cross_attn_k,
                 window=self.cross_attn_window_encoder,
-                block_mask=self.cross_attn_use_flex_attention,
+                block_mask=False,
             )
 
         # Hashing and embedding
@@ -1036,7 +1037,7 @@ class ByteLatentTransformer(
                 patches_as_queries=False,
                 cross_attn_k=self.cross_attn_k,
                 window=self.cross_attn_window_decoder,
-                block_mask=self.cross_attn_use_flex_attention,
+                block_mask=False,
             )
 
         # Local decoder

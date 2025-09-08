@@ -59,7 +59,7 @@ model:
   use_local_encoder_transformer: true
   init_use_gaussian: true
   init_use_depth: "current"
-  attn_impl: "xformers"
+  attn_impl: "sdpa"
   attn_bias_type: "block_causal"
   alpha_depth: "disabled"
   max_length: 256

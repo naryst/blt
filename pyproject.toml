@@ -26,7 +26,6 @@ dependencies = [
     "typer>=0.15.3",
     "viztracer>=1.0.3",
     "wandb>=0.19.10",
-    "xformers",
 ]
 
 [[tool.uv.index]]
@@ -36,7 +35,6 @@ url = "https://download.pytorch.org/whl/nightly/cu121"
 
 [tool.uv.sources]
 torch = {index = "torch-nightly-cu121"}
-xformers = { git = "https://github.com/facebookresearch/xformers.git", rev = "de742ec3d64bd83b1184cc043e541f15d270c148" }
 
 [dependency-groups]
 pre_build = [
@@ -44,7 +42,6 @@ pre_build = [
     "ninja",
     "torch==2.6.0.dev20241112",
 ]
-compile_xformers = ['xformers']
 dev = [
     "black==24.8.0",
     "ipython>=9.2.0",
@@ -54,7 +51,6 @@ dev = [
 
 
 [tool.uv]
-no-build-isolation-package = ["xformers"]
 index-strategy = "unsafe-best-match"
 override-dependencies = ["torch==2.6.0.dev20241112"]
 

@@ -41,7 +41,7 @@ conda create -n blt python=3.12
 conda activate blt
 pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu121
 pip install ninja
-pip install -v -U git+https://github.com/facebookresearch/xformers.git@de742ec3d64bd83b1184cc043e541f15d270c148
+# xformers is optional; not required when using PyTorch SDPA
 pip install -r requirements.txt
 conda activate blt
 ```
@@ -70,7 +70,7 @@ The main benefit of this method is that the build is reproducible since there is
 
 ```bash
 uv pip install --group pre_build --no-build-isolation
-uv pip install --group compile_xformers --no-build-isolation
+# xformers optional group removed; SDPA is default
 uv sync
 uv run python download_blt_weights.py
 uv run python demo.py "A BLT has"

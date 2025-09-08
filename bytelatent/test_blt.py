@@ -102,7 +102,7 @@ def create_args(cross_attention=False):
         init_use_gaussian=True,
         init_use_depth="current",
         attn_bias_type="block_causal",
-        attn_impl="xformers",
+        attn_impl="sdpa",
         alpha_depth="disabled",
         max_length=256,
         local_attention_window_len=512,
@@ -340,7 +340,7 @@ class TestByteLatentTransformer:
         model = ByteLatentTransformer(args)
         assert model is not None
 
-    @pytest.mark.parametrize("attn_impl", ["sdpa", "xformers"])
+    @pytest.mark.parametrize("attn_impl", ["sdpa"])
     def test_blt_transformer_forward(self, attn_impl):
         args = create_args()
         if attn_impl == "sdpa":
@@ -446,7 +446,7 @@ class TestByteLatentTransformer:
 
     def test_loss_backward(self):
         args = create_args()
-        args = args.model_copy(update=dict(attn_impl="xformers"))
+        args = args.model_copy(update=dict(attn_impl="sdpa"))
         batch = fake_batch()
         model = ByteLatentTransformer(args)
         steps = 10

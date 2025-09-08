@@ -29,7 +29,7 @@ class PatchingModeEnum(str, Enum):
 
 class PatcherArgs(BaseModel):
     patching_mode: PatchingModeEnum = PatchingModeEnum.entropy
-    patching_device: str = "cuda"
+    patching_device: str = "cpu"
     entropy_model_checkpoint_dir: str | None = None
     realtime_patching: bool = False
     threshold: float = 1.335442066192627
@@ -37,7 +37,7 @@ class PatcherArgs(BaseModel):
     max_patch_length: int | None = None
     patch_size: float = 4.5
     patching_batch_size: int = 1
-    device: str = "cuda"
+    device: str = "cpu"
     monotonicity: bool = False
     log_time: bool = False
 
@@ -262,12 +262,50 @@ def find_space_patch_start_ids(tokens):
     return patch_start_ids
 
 
+def _resolve_device(preferred_device: str | None) -> torch.device:
+    """
+    Resolve a preferred device string to an actual torch.device, with safe fallbacks.
+
+    Priority:
+    - If preferred is 'cuda' or startswith 'cuda' and CUDA is available → that CUDA device
+    - Else if preferred is 'mps' and MPS is available → 'mps'
+    - Else if MPS is available → 'mps'
+    - Else → 'cpu'
+    """
+    try:
+        normalized = (preferred_device or "").lower()
+    except AttributeError:
+        normalized = ""
+
+    # Global override to force CPU
+    if os.environ.get("BLT_FORCE_CPU", "0") == "1":
+        return torch.device("cpu")
+
+    # CUDA path
+    if normalized.startswith("cuda"):
+        if torch.cuda.is_available():
+            if normalized == "cuda":
+                rank = get_local_rank()
+                return torch.device(f"cuda:{rank}")
+            return torch.device(normalized)
+        # CUDA requested but not available → force CPU
+        return torch.device("cpu")
+
+    # Explicit MPS preference
+    if normalized.startswith("mps"):
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        # MPS requested but not available → CPU
+        return torch.device("cpu")
+
+    # Default CPU
+    return torch.device("cpu")
+
+
 def to_device(entropy_model, device=None):
-    if device == "cuda":
-        rank = get_local_rank()
-        device = f"cuda:{rank}"
-    entropy_model = entropy_model.to(device)
-    return entropy_model, device
+    target_device = _resolve_device(device)
+    entropy_model = entropy_model.to(target_device)
+    return entropy_model, target_device
 
 
 def model_pred_to_bpe_patching_pred(pred):
@@ -499,7 +537,8 @@ class Patcher:
         self.max_patch_length = patcher_args.max_patch_length
         self.patch_size = patcher_args.patch_size
         self.patching_batch_size = patcher_args.patching_batch_size
-        self.device = patcher_args.device
+        # Resolve execution device safely (handles cuda/mps/cpu)
+        self.exec_device = _resolve_device(patcher_args.device)
         self.monotonicity = patcher_args.monotonicity
         self.log_time = patcher_args.log_time
         if self.log_time:
@@ -566,7 +605,7 @@ class Patcher:
                     tokens,
                     self.entropy_model,
                     self.patching_batch_size,
-                    self.device,
+                    self.exec_device,
                 )
             if self.log_time:
                 self.log["calculate_entropies"] += time.time() - s
@@ -599,7 +638,7 @@ class Patcher:
                 tokens,
                 self.entropy_model,
                 self.patching_batch_size,
-                self.device,
+                self.exec_device,
                 include_next_token,
             )
             patch_lengths = patch_lengths_from_start_ids(

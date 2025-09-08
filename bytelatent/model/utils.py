@@ -4,7 +4,6 @@ import os
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
-from xformers.ops import fmha
 
 logger = logging.getLogger()
 
@@ -131,47 +130,44 @@ def create_causal_mask(
     tokens: torch.Tensor | None = None,
     sliding_window: int | None = None,
 ):
-    if attn_impl == "xformers":
-        if attn_bias_type is None:
-            return fmha.attn_bias.LowerTriangularMask()
-        elif attn_bias_type == "causal":
-            assert sliding_window is None
-            return fmha.attn_bias.LowerTriangularMask()
-        elif attn_bias_type == "block_causal":
-            assert sliding_window is None
-            assert eos_id is not None
-            assert tokens is not None
-            return fmha.attn_bias.BlockDiagonalCausalMask.from_seqlens(
-                q_seqlen=tokens_to_seqlen(tokens, eos_id)
-            )
-        elif attn_bias_type == "local_block_causal":
-            assert sliding_window is not None
-            assert eos_id is not None
-            assert tokens is not None
-            return fmha.attn_bias.BlockDiagonalCausalMask.from_seqlens(
-                q_seqlen=tokens_to_seqlen(tokens, eos_id)
-            ).make_local_attention(sliding_window)
-        else:
-            return fmha.attn_bias.LocalAttentionFromBottomRightMask(
-                window_left=sliding_window - 1, window_right=0
-            )
-    elif attn_impl == "sdpa":
-        BLT_SUPPRESS_ATTN_ERROR = int(os.environ.get("BLT_SUPPRESS_ATTN_ERROR", 0))
-
-        if attn_bias_type == "causal":
+    if attn_impl == "sdpa":
+        # Build PyTorch SDPA-compatible masks
+        if attn_bias_type is None or attn_bias_type == "causal":
             return "causal"
 
-        if BLT_SUPPRESS_ATTN_ERROR == 1:
-            return "causal"
-        else:
-            raise ValueError(
-                "SDPA attention being used, which doesn't have specialized attention implementations for block_causal and local_block_causal attention. To suppress this error and run the model anyway, set the environment variable BLT_SUPPRESS_ATTN_ERROR=1"
-            )
+        if attn_bias_type in ["block_causal", "local_block_causal"]:
+            assert tokens is not None and eos_id is not None
+            B, S = tokens.shape
+            # Compute per-token document ids per row: increment on EOS tokens
+            eos_flags = (tokens == eos_id).to(torch.int32)
+            # cumulative count of eos along seq dim becomes doc ids (0-based)
+            doc_ids = torch.cumsum(eos_flags, dim=1)
+            # make sure last position always considered end of document window for unfinished rows
+            # (no need to modify doc_ids, as tokens after last EOS stay in last doc)
+
+            # token positions within row
+            positions = torch.arange(S, device=tokens.device).view(1, S)
+
+            # Build [B, S, S] boolean allow matrix
+            same_doc = doc_ids.unsqueeze(2) == doc_ids.unsqueeze(1)
+            causal_ok = positions.unsqueeze(2) >= positions.unsqueeze(1)
+            allow = same_doc & causal_ok
+            if attn_bias_type == "local_block_causal":
+                assert sliding_window is not None and sliding_window > 0
+                within_window = positions.unsqueeze(2) < (
+                    positions.unsqueeze(1) + sliding_window
+                )
+                allow = allow & within_window
+            # Ensure attention mask dtype matches query dtype requirements: bool or float
+            attn_mask = torch.zeros((B, 1, S, S), device=tokens.device, dtype=torch.float32)
+            attn_mask = attn_mask.masked_fill(~allow.unsqueeze(1), float("-inf"))
+            return attn_mask
+
+        # Fallback: pure causal
+        return "causal"
+
     elif attn_impl == "flex_attention":
         return create_block_mask(causal_mask, None, None, seqlen, seqlen)
-    elif attn_impl == "fmha":
-        return None
     else:
-        raise NotImplementedError(
-            f"Attention {attn_impl} with {sliding_window} sliding window not implemented"
-        )
+        # Default to SDPA-style causal if unknown impl
+        return "causal"

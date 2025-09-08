@@ -9,7 +9,6 @@ import torch.nn as nn
 from pydantic import ConfigDict
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import BlockMask
-from xformers.ops import AttentionBias
 
 from bytelatent.base_transformer import (
     BaseTransformerArgs,
@@ -34,7 +33,7 @@ except (ImportError, ModuleNotFoundError):
 class LocalModelArgs(BaseTransformerArgs):
     model_config = ConfigDict(extra="forbid")
     # Override defaults
-    attn_impl: str | None = "xformers"
+    attn_impl: str | None = "sdpa"
     attn_bias_type: str | None = "local_block_causal"
 
     # Local encoder specific dimensions
@@ -248,7 +247,7 @@ class LocalEncoder(LocalModelBase):
         tokens: torch.Tensor,
         embeds: Optional[torch.Tensor] = None,
         patch_embeds: Optional[torch.Tensor] = None,
-        mask: Optional[Union["BlockMask", "AttentionBias", torch.Tensor, str]] = None,
+        mask: Optional[Union["BlockMask", torch.Tensor, str]] = None,
         cross_mask: Optional[torch.Tensor] = None,
         num_patches: Optional[int] = None,
         patch_ids: Optional[torch.Tensor] = None,
@@ -348,7 +347,7 @@ class LocalDecoder(LocalModelBase):
         tokens: torch.Tensor,
         embeds: Optional[torch.Tensor],
         patch_embeds: Optional[torch.Tensor] = None,
-        mask: Optional[Union["BlockMask", "AttentionBias", torch.Tensor, str]] = None,
+        mask: Optional[Union["BlockMask", torch.Tensor, str]] = None,
         cross_mask: Optional[torch.Tensor] = None,
         cache: Optional[List[Tuple[torch.Tensor, torch.Tensor, int]]] = None,
     ):

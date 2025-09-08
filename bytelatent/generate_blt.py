@@ -1,6 +1,7 @@
 import logging
 import os
 
+from huggingface_hub.keras_mixin import _flatten_dict
 import torch
 
 from bytelatent.args import EvalArgs
@@ -99,13 +100,17 @@ def generate_nocache(
     else:
         prompt_tokens = [tokenizer.encode(t, add_eos=False) for t in prompts]
         n_truncated_prompts = sum([max_prompt_len < len(t) for t in prompt_tokens])
-        total_truncated_prompts = dist_sum(n_truncated_prompts)
 
         # Truncation
         prompt_tokens = [
             t if len(t) < max_prompt_len else t[len(t) - max_prompt_len :]
             for t in prompt_tokens
         ]
+
+    if torch.distributed.is_initialized():
+        total_truncated_prompts = dist_sum(n_truncated_prompts)
+    else:
+        total_truncated_prompts = n_truncated_prompts
 
     if total_truncated_prompts > 0:
         logger.info(
@@ -115,18 +120,35 @@ def generate_nocache(
         )
 
     if prompt_tokens is None:
-        prompt_tokens = [[tokenizer.bos_id] for _ in range(end_pos)]
+        # Default to a single empty prompt starting with BOS
+        prompt_tokens = [[tokenizer.bos_id]]
 
     start_pos, end_pos = get_generation_range(prompt_tokens, max_gen_len)
     batch_size = len(prompt_tokens)
-    tokens = torch.full((batch_size, end_pos), tokenizer.pad_id).cuda().long()
+    # Allocate on the same device as the model
+    # Force CPU if requested via env or if model is on MPS and user prefers CPU
+    if os.environ.get("BLT_FORCE_CPU", "0") == "1":
+        model_device = torch.device("cpu")
+    else:
+        try:
+            model_device = next(model.parameters()).device
+        except StopIteration:
+            model_device = torch.device("cpu")
+        if str(model_device).startswith("mps") and os.environ.get("BLT_DISABLE_MPS", "1") == "1":
+            model_device = torch.device("cpu")
+    tokens = torch.full(
+        (batch_size, end_pos), tokenizer.pad_id, device=model_device, dtype=torch.long
+    )
 
     # Copy inputs to tensor for generated tokens
     for i, row_tokens in enumerate(prompt_tokens):
-        tokens[i, : len(row_tokens)] = torch.tensor(row_tokens).long()
+        tokens[i, : len(row_tokens)] = torch.tensor(
+            row_tokens, dtype=torch.long, device=model_device
+        )
     input_text_mask = tokens != tokenizer.pad_id
 
-    for i, curr_pos in enumerate(range(start_pos, end_pos)):
+    from tqdm import tqdm
+    for i, curr_pos in enumerate(tqdm(range(start_pos, end_pos))):
         current_tokens = tokens[:, :curr_pos]
         patch_lengths, _ = patcher.patch(current_tokens, include_next_token=True)
         logits = model(current_tokens, patch_lengths=patch_lengths)[:, -1]

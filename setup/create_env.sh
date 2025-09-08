@@ -34,7 +34,6 @@ echo "Currently in env $(which python)"
 # Install packages
 pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu121
 pip install ninja
-pip install -v -U git+https://github.com/facebookresearch/xformers.git@de742ec3d64bd83b1184cc043e541f15d270c148
 pip install -r requirements.txt
 
 # End timer
